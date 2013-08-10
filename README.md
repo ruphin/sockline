@@ -34,3 +34,9 @@ Current issues
 - It is currently not possible to unsubscribe from graphs
 - Comparison of graphSelectors is not sufficient and needs a more robust implementation
 - Some code needs cleanup
+
+
+Attribution
+-----------
+
+Sockline is owned by [Phusion](https://github.com/phusion)
