@@ -9,6 +9,8 @@
   //   }
   // ]
   var callbackStore = [],
+    deferreds = [],
+    configuration = {},
     sock;
 
   function log(message) {
@@ -21,6 +23,12 @@
 
   function recoverFromSocketClose(event) {
     log(event);
+    sock = undefined;
+  }
+
+  function connected() {
+    // readyState === 1 means the connection is open, as defined in http://dev.w3.org/html5/websockets
+    return ((sock !== undefined) && (sock.readyState === 1));
   }
 
   // TODO: Merge dispatchData and dispatchError
@@ -57,7 +65,7 @@
   function parseMessage(message) {
     console.log("Received: " + message)
     var messageObject = JSON.parse(message);
-    if( Object.prototype.toString.call( messageObject ) === '[object Array]' ) {
+    if (Object.prototype.toString.call(messageObject) === '[object Array]') {
 
       messageObject.forEach(function (data) {
         var graphSelector = data['graphSelector'];
@@ -76,9 +84,54 @@
     }
   }
 
+  function handleDeferreds() {
+    deferreds.filter(function (submit) {
+      return submit();
+    })
+  }
+
+  // Unsubscribe from receiving updates for the selected graph.
+  function unsubscribe(graphSelector, successCallback, errorCallback) {
+    // Function that submits the unsubscription to the server. Returns false when done, true otherwise.
+    var submitUnsubscription = function () {
+      if (connected()) {
+        sock.send(JSON.stringify({'unsubscribe': graphSelector}));
+        return false;
+      } else {
+        return true;
+      }
+    }
+
+    // Remove callbacks
+    callbackStore.every(function (storedGraph, index) {
+      // TODO: Make a more robust comparison method
+      if (JSON.stringify(storedGraph['graphSelector']) === JSON.stringify(graphSelector)) {
+        if (storedGraph['successCallbacks'].indexOf(successCallback) >= 0) {
+          storedGraph['successCallbacks'].splice(storedGraph['successCallbacks'].indexOf(successCallback), 1);
+        }
+        if (storedGraph['errorCallbacks'].indexOf(errorCallback) >= 0) {
+          storedGraph['errorCallbacks'].splice(storedGraph['errorCallbacks'].indexOf(errorCallback), 1);
+        }
+        // If this graph has no remaining callbacks, remove it from the store, and submit an unsubscription to the server.
+        if (storedGraph['successCallbacks'].length + storedGraph['errorCallbacks'].length === 0) {
+          callbackStore.splice(index, 1);
+          if (submitUnsubscription()) {
+            log("called unsubscribe while not connected - deferring");
+            deferreds.push(submitUnsubscription)
+          }
+        }
+        return false;
+      } else {
+        return true;
+      }
+    })
+  }
+
+
   // TODO: Connect should not accept an uri. Instead, this should be configured beforehand using a configuration option.
   sockline.connect = function (socketuri) {
     sock = new WebSocket(socketuri);
+    sock.onopen = function () { handleDeferreds(); };
     sock.onmessage = function (event) { parseMessage(event.data); };
     sock.onerror = function (event) { errlog(event); };
     sock.onclose = function (event) { recoverFromSocketClose(event); };
@@ -96,37 +149,41 @@
   // Subscribe to updates for the selected graph, and attach callbacks.
   sockline.subscribe = function (graphSelector, successCallback, errorCallback) {
     var callbacks;
-    var found = false;
+    var unknown_graph;
+
+    // Function that submits the subscription to the server. Returns false when done, true otherwise.
+    var submitSubscription = function () {
+      if (connected()) {
+        sock.send(JSON.stringify({'subscribe': graphSelector}));
+        return false;
+      } else {
+        return true;
+      }
+    }
+
     // Register callbacks
-    callbackStore.forEach(function (graph) {
+    unknown_graph = callbackStore.every(function (storedGraph) {
       // TODO: Make a more robust comparison method
-      if (JSON.stringify(graph['graphSelector']) === JSON.stringify(graphSelector)) {
-        graph['successCallbacks'].push(successCallback);
-        graph['errorCallbacks'].push(errorCallback);
-        found = true;
+      if (JSON.stringify(storedGraph['graphSelector']) === JSON.stringify(graphSelector)) {
+        storedGraph['successCallbacks'].push(successCallback);
+        storedGraph['errorCallbacks'].push(errorCallback);
+        return false;
+      } else {
+        return true;
       }
     })
-    if (!found) {
+
+    if (unknown_graph) {
       callbackStore.push({'graphSelector':graphSelector, 'successCallbacks':[successCallback], 'errorCallbacks':[errorCallback]})
+      // Submit subscription or defer
+      if (submitSubscription()) {
+        log("called subscribe while not connected - deferring");
+        deferreds.push(submitSubscription)
+      }
     }
 
-    // Send subscription message
-    if (sock !== undefined) {
-      sock.send(JSON.stringify({'subscribe': graphSelector}));
-    } else {
-      log(new Error("called subscribe before connecting"));
-    }
-  }
-
-  // Unsubscribe from receiving updates for the selected graph.
-  sockline.unsubscribe = function (graphSelectors) {
-    // Remove callbacks
-    // TODO: Remove callbacks
-
-    // Send an unsubscription message
-    if (sock !== undefined) {
-      sock.send(JSON.stringify({'unsubscribe': graphSelector}));
-    }
+    // Return a subscription object that implements an 'unsubscribe' method.
+    return {'unsubscribe': (function() { unsubscribe(graphSelector, successCallback, errorCallback); })}
   }
 
   // Function to test things, to be removed.
