@@ -4,51 +4,68 @@
   // [
   //   {
   //     graphSelector: {graphSelectorObject}
-  //     successCallbacks: [callback*]
-  //     errorCallbacks: [callback*]
-  //   }
+  //     successCallbacks: [callback,]
+  //     errorCallbacks: [callback,]
+  //   },
   // ]
-  var callbackStore = [],
-    deferreds = [],
-    configuration = {},
-    sock;
+  var callbackStore = [];
 
+  // A queue of messages that have been deferred until sockline is connected
+  // Each message is contained in a lambda that attempts to submit the message, and returns true if it needs to be resubmitted later.
+  var deferreds = [];
+
+  // Configuration object
+  // TODO: Define and use this
+  var configuration = {};
+
+  // The WebSocket connection to the server
+  var sock;
+
+  // Log a message to the console
   function log(message) {
     console.log("Sockline - " + message);
   }
 
+  // Log an error to the console
   function errlog(error) {
     log(error.name + ": " + error.message);
   }
 
+  // Handle closing of the socket
+  // TODO: Do something useful, like exposing a hook to the user
   function recoverFromSocketClose(event) {
     log(event);
     sock = undefined;
   }
 
+  // Return the connection state to the server. 
+  // Returns true if the connection is established and open.
   function connected() {
     // readyState === 1 means the connection is open, as defined in http://dev.w3.org/html5/websockets
     return ((sock !== undefined) && (sock.readyState === 1));
   }
 
+  // Dispatch the graphData to the correct callbacks
   // TODO: Merge dispatchData and dispatchError
-  function dispatchData(graphSelector, data) {
+  function dispatchData(graphSelector, graphData) {
     callbackStore.forEach(function (graph) {
       // TODO: Make a more robust comparison method
       if (JSON.stringify(graph['graphSelector']) === JSON.stringify(graphSelector)) {
         graph['successCallbacks'].forEach(function (callback) {
-          callback.call(this, data);
+          callback.call(this, graphData);
         })
       }
     })
   }
 
-  function dispatchError(graphSelector, data) {
+  // Dispatch the error to the correct callbacks
+  // TODO: Merge dispatchData and dispatchError
+  function dispatchError(graphSelector, error) {
     callbackStore.forEach(function (graph) {
       // TODO: Make a more robust comparison method
       if (JSON.stringify(graph['graphSelector']) === JSON.stringify(graphSelector)) {
         graph['errorCallbacks'].forEach(function (callback) {
-          callback.call(this, data);
+          callback.call(this, error);
         })
       }
     })
@@ -57,11 +74,14 @@
   // Message object format:
   // [
   //  {
-  //    graphSelector: {GraphSelectorObject},
-  //    result: 'success' || 'error', 
-  //    data: graphData || errorMessage,
-  //  }+
+  //    graphSelector: {GraphSelectorObject}
+  //    result: 'success' || 'error'
+  //    data: graphData || errorMessage
+  //  },
   // ]
+
+  // Handles incoming messages from the server.
+  // If the formatting is correct, dispatches any received data or errors to the callbacks
   function parseMessage(message) {
     console.log("Received: " + message)
     var messageObject = JSON.parse(message);
@@ -84,15 +104,20 @@
     }
   }
 
+  // Attempts to submit all the deferred messages, removing those succesfully submitted from the queue.
   function handleDeferreds() {
-    deferreds.filter(function (submit) {
-      return submit();
-    })
+    if (connected()) {
+      deferreds.filter(function (submit) {
+        return submit();
+      })
+    }
   }
 
   // Unsubscribe from receiving updates for the selected graph.
+  // This is only called from a subscription object, returned by the subscribe method.
   function unsubscribe(graphSelector, successCallback, errorCallback) {
-    // Function that submits the unsubscription to the server. Returns false when done, true otherwise.
+    
+    // Lambda that submits the unsubscription to the server. Returns false when done, true otherwise.
     var submitUnsubscription = function () {
       if (connected()) {
         sock.send(JSON.stringify({'unsubscribe': graphSelector}));
@@ -147,11 +172,13 @@
   // }
 
   // Subscribe to updates for the selected graph, and attach callbacks.
+  // @graphSelector - The graphselector to subscribe to
+  // @successCallback - The function to be called when data is received for this graphselector
+  // @errorCallback - The function to be called when an error is received for this graphselector
   sockline.subscribe = function (graphSelector, successCallback, errorCallback) {
-    var callbacks;
     var unknown_graph;
 
-    // Function that submits the subscription to the server. Returns false when done, true otherwise.
+    // Lambda that submits the subscription to the server. Returns false when done, true otherwise.
     var submitSubscription = function () {
       if (connected()) {
         sock.send(JSON.stringify({'subscribe': graphSelector}));
@@ -161,7 +188,9 @@
       }
     }
 
-    // Register callbacks
+    // ## Register callbacks
+    // First, check if someone already subscribed to this graphSelector. 
+    // If so, simply add the callbacks to the store.
     unknown_graph = callbackStore.every(function (storedGraph) {
       // TODO: Make a more robust comparison method
       if (JSON.stringify(storedGraph['graphSelector']) === JSON.stringify(graphSelector)) {
@@ -173,16 +202,19 @@
       }
     })
 
+    // If this graphSelector has not been subscribed to, create it in the callbackStore and add the callbacks.
+    // Also submit a subscription message to the server, or defer this message if sockline is not connected yet.
     if (unknown_graph) {
       callbackStore.push({'graphSelector':graphSelector, 'successCallbacks':[successCallback], 'errorCallbacks':[errorCallback]})
-      // Submit subscription or defer
       if (submitSubscription()) {
         log("called subscribe while not connected - deferring");
         deferreds.push(submitSubscription)
       }
     }
 
-    // Return a subscription object that implements an 'unsubscribe' method.
+    // ## Return a subscription object 
+    // The subscription object implements an 'unsubscribe' method.
+    // This method can be used to remove the callbacks for this subscription.
     return {'unsubscribe': (function() { unsubscribe(graphSelector, successCallback, errorCallback); })}
   }
 
