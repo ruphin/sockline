@@ -78,37 +78,37 @@
               callback.call(undefined, get['data'])
             })
           } else {
-            errlog(new Error("Get " + selector + " received unknown result: " + sub['result']));
+            errlog(new Error("Get " + selector + " received unknown result: " + get['result']));
           }
         }
       })
     })
   }
 
-  // Dispatch a subscribe response to the correct callbacks
-  function dispatchSubscribe(subResponse) {
-    subResponse.forEach(function (subscribe) {
-      var selector = JSON.stringify(subscribe['graphSelector'])
+  // Dispatch a subscription response to the correct callbacks
+  function dispatchSubscription(subscriptions) {
+    subscriptions.forEach(function (subscription) {
+      var selector = JSON.stringify(subscription['graphSelector'])
       subCallbacks.forEach(function (callbacks) {
         if (JSON.stringify(callbacks['graphSelector'] === selector)) {
-          if (subscribe['result'] === 'success') {
+          if (subscription['result'] === 'success') {
             callbacks['success'].forEach(function (callback) {
-              callback.call(undefined, subscribe['data'])
+              callback.call(undefined, subscription['data'])
             })
-          } else if (subscribe['result'] === 'error') {
+          } else if (subscription['result'] === 'error') {
             callbacks['error'].forEach(function (callback) {
               errlog(new Error("Subscribe " + selector + " received error: " + data['data']));
-              callback.call(undefined, subscribe['data'])
+              callback.call(undefined, subscription['data'])
             })
           } else {
-            errlog(new Error("Subscribe " + selector + " received unknown result: " + subscribe['result']));
+            errlog(new Error("Subscribe " + selector + " received unknown result: " + subscription['result']));
           }
         }
       })
     })
   }
 
-  // Message object format:
+  // Incoming message object format:
   // { 
   //  get: [
   //        {
@@ -117,7 +117,7 @@
   //          data: graphData || errorMessage
   //        },
   //      ] || undefined
-  //  subscribe: [
+  //  subscription: [
   //        {
   //          graphSelector: {GraphSelectorObject}
   //          result: 'success' || 'error'
@@ -135,10 +135,10 @@
     if (messageObject['get'] !== undefined) {
       dispatchGet(messageObject['get'])
     }
-    if (messageObject['subscribe'] !== undefined) {
-      dispatchSubscribe(messageObject['subscribe'])
+    if (messageObject['subscription'] !== undefined) {
+      dispatchSubscription(messageObject['subscription'])
     }
-    if (messageObject['get'] === undefined && messageObject['subscribe'] === undefined) {
+    if (messageObject['get'] === undefined && messageObject['subscription'] === undefined) {
       errlog(new Error ("Received incorrectly formatted message"))
     }
   }
@@ -159,7 +159,7 @@
     // Lambda that submits the unsubscription to the server. Returns false when done, true otherwise.
     var submitUnsubscription = function () {
       if (connected()) {
-        sock.send(JSON.stringify({'unsubscribe': graphSelector}));
+        sock.send(JSON.stringify({'unsubscribe': [graphSelector]}));
         return false;
       } else {
         return true;
@@ -217,7 +217,7 @@
     // Lambda that submits a get and subscribe message to the server. Returns false when done, true otherwise.
     var submitSubscription = function () {
       if (connected()) {
-        sock.send(JSON.stringify({'subscribe': graphSelector}))
+        sock.send(JSON.stringify({'subscribe': [graphSelector]}))
         return false;
       } else {
         return true;
@@ -267,7 +267,7 @@
     // Lambda that submits a get message to the server. Returns false when done, true otherwise.
     var submitGet = function () {
       if (connected()) {
-        sock.send(JSON.stringify({'get': graphSelector}));
+        sock.send(JSON.stringify({'get': [graphSelector]}));
         return false;
       } else {
         return true;
