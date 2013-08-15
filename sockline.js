@@ -85,23 +85,23 @@
     })
   }
 
-  // Dispatch a sub response to the correct callbacks
-  function dispatchSub(getResponse) {
-    getResponse.forEach(function (sub) {
-      var selector = JSON.stringify(sub['graphSelector'])
+  // Dispatch a subscribe response to the correct callbacks
+  function dispatchSubscribe(subResponse) {
+    subResponse.forEach(function (subscribe) {
+      var selector = JSON.stringify(subscribe['graphSelector'])
       subCallbacks.forEach(function (callbacks) {
         if (JSON.stringify(callbacks['graphSelector'] === selector)) {
-          if (sub['result'] === 'success') {
+          if (subscribe['result'] === 'success') {
             callbacks['success'].forEach(function (callback) {
-              callback.call(undefined, sub['data'])
+              callback.call(undefined, subscribe['data'])
             })
-          } else if (sub['result'] === 'error') {
+          } else if (subscribe['result'] === 'error') {
             callbacks['error'].forEach(function (callback) {
               errlog(new Error("Subscribe " + selector + " received error: " + data['data']));
-              callback.call(undefined, sub['data'])
+              callback.call(undefined, subscribe['data'])
             })
           } else {
-            errlog(new Error("Subscribe " + selector + " received unknown result: " + sub['result']));
+            errlog(new Error("Subscribe " + selector + " received unknown result: " + subscribe['result']));
           }
         }
       })
@@ -117,7 +117,7 @@
   //          data: graphData || errorMessage
   //        },
   //      ] || undefined
-  //  sub: [
+  //  subscribe: [
   //        {
   //          graphSelector: {GraphSelectorObject}
   //          result: 'success' || 'error'
@@ -135,10 +135,10 @@
     if (messageObject['get'] !== undefined) {
       dispatchGet(messageObject['get'])
     }
-    if (messageObject['sub'] !== undefined) {
-      dispatchSub(messageObject['sub'])
+    if (messageObject['subscribe'] !== undefined) {
+      dispatchSubscribe(messageObject['subscribe'])
     }
-    if (messageObject['get'] === undefined && messageObject['sub'] === undefined) {
+    if (messageObject['get'] === undefined && messageObject['subscribe'] === undefined) {
       errlog(new Error ("Received incorrectly formatted message"))
     }
   }
@@ -334,8 +334,7 @@
 // var succ = (function (data) {console.log("Successback received: " + data)})
 // var err = (function (data) {console.log("Errback received: " + data)})
 // var graph = {name: 'test.graph', start: 1, end: 2, precision: '15s'}
-// var testMessage = JSON.stringify([{graphSelector: graph, result: 'success', data: 'This is test data1'},{graphSelector: graph, result: 'success', data: 'This is test data2'},{graphSelector: graph, result: 'error', data: 'This is a test error'}])
-// var test = JSON.stringify({get:[{graphSelector:graph, result:'success', data:[1,2,3,4,5]}], sub:[{graphSelector:graph, result:'success', data:[6]}]})
+// var testMessage = JSON.stringify({get:[{graphSelector:graph, result:'success', data:[1,2,3,4,5]}], subscription:[{graphSelector:graph, result:'success', data:[6]}]})
 // window.sockline.connect(wsUri);
 // window.sockline.subscribe(graph, succ, err);
 // window.sockline.send(testMessage)
