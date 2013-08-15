@@ -3,8 +3,8 @@
   // GraphSelector object format:
   // {
   //   identifier: 'graph.name'
-  //   begin: new Date().getTime() || '-5s' || '-2m' || '-6h' || '-14d'
-  //   end: new Date().getTime() || '-5s' || '-2m' || '-6h' || '-14d' || 'now'
+  //   from: new Date().getTime() || '-5s' || '-2m' || '-6h' || '-14d'
+  //   until: new Date().getTime() || '-5s' || '-2m' || '-6h' || '-14d' || 'now'
   //   granularity: '15s' || '3m' || '5h' || '12d'
   // }
 
@@ -62,12 +62,15 @@
     return ((sock !== undefined) && (sock.readyState === 1));
   }
 
-  // Dispatch a get response to the correct callbacks
+  // Dispatch a get response to the correct callbacks. 
+  // Removes the found graphSelector with it's callbacks from the getCallbacks
   function dispatchGet(getResponse) {
     getResponse.forEach(function (get) {
       var selector = JSON.stringify(get['graphSelector'])
-      getCallbacks.forEach(function (callbacks) {
-        if (JSON.stringify(callbacks['graphSelector'] === selector)) {
+      getCallbacks.every(function (callbacks, index) {
+        if (JSON.stringify(callbacks['graphSelector']) === selector) {
+          getCallbacks.splice(index, 1)
+          
           if (get['result'] === 'success') {
             callbacks['success'].forEach(function (callback) {
               callback.call(undefined, get['data'])
@@ -80,6 +83,9 @@
           } else {
             errlog(new Error("Get " + selector + " received unknown result: " + get['result']));
           }
+          return false;
+        } else {
+          return true;
         }
       })
     })
@@ -90,7 +96,7 @@
     subscriptions.forEach(function (subscription) {
       var selector = JSON.stringify(subscription['graphSelector'])
       subCallbacks.forEach(function (callbacks) {
-        if (JSON.stringify(callbacks['graphSelector'] === selector)) {
+        if (JSON.stringify(callbacks['graphSelector']) === selector) {
           if (subscription['result'] === 'success') {
             callbacks['success'].forEach(function (callback) {
               callback.call(undefined, subscription['data'])
@@ -129,7 +135,7 @@
   // Handles incoming messages from the server.
   // If the formatting is correct, dispatches any received data or errors to the callbacks
   function parseMessage(message) {
-    console.log("Received: " + message)
+    // console.log("Received: " + message)
     var messageObject = JSON.parse(message);
 
     if (messageObject['get'] !== undefined) {
@@ -149,6 +155,36 @@
       deferreds.filter(function (submit) {
         return submit();
       })
+    }
+  }
+
+  // Registers the provided callbacks to the callbackStore.
+  // If the given graphSelector had no callbacks attached, tries to call the submitMethod to send a message to the server.
+  function registerCallbacks(callbackStore, graphSelector, successCallback, errorCallback, submitMethod) {
+    var unknown_graph;
+    var selector = JSON.stringify(graphSelector);
+
+    // First, check if callbacks are already attached to this graphSelector. 
+    // If so, simply add the new callbacks.
+    unknown_graph = callbackStore.every(function (callbacks) {
+      // TODO: Make a more robust comparison method
+      if (JSON.stringify(callbacks['graphSelector']) === selector) {
+        callbacks['success'].push(successCallback);
+        callbacks['error'].push(errorCallback);
+        return false;
+      } else {
+        return true;
+      }
+    })
+
+    // If this graphSelector is not found in the callbackStore, add it.
+    // Also submit a subscription message to the server, or defer this message if sockline is not connected yet.
+    if (unknown_graph) {
+      callbackStore.push({'graphSelector':graphSelector, 'success':[successCallback], 'error':[errorCallback]})
+      if (submitMethod && submitMethod()) {
+        log("trying to send messages while not connected - deferring");
+        deferreds.push(submitMethod)
+      }
     }
   }
 
@@ -208,11 +244,6 @@
   // @successCallback - The function to be called when data is received
   // @errorCallback - The function to be called when an error is received
   sockline.subscribe = function (graphSelector, successCallback, errorCallback) {
-    var unknown_graph;
-    var selector = JSON.stringify(graphSelector);
-
-    // First, submit a get request for the data on this range.
-    sockline.get(graphSelector, successCallback, errorCallback);
 
     // Lambda that submits a get and subscribe message to the server. Returns false when done, true otherwise.
     var submitSubscription = function () {
@@ -224,29 +255,11 @@
       }
     }
 
-    // ## Register callbacks
-    // First, check if someone already subscribed to this graphSelector. 
-    // If so, simply add the new callbacks.
-    unknown_graph = subCallbacks.every(function (callbacks) {
-      // TODO: Make a more robust comparison method
-      if (JSON.stringify(callbacks['graphSelector']) === selector) {
-        callbacks['success'].push(successCallback);
-        callbacks['error'].push(errorCallback);
-        return false;
-      } else {
-        return true;
-      }
-    })
+    // Add the callbacks to getCallbacks, but do not submit a get message
+    registerCallbacks(getCallbacks, graphSelector, successCallback, errorCallback, false)
 
-    // If this graphSelector has not been subscribed to, add the graph to subCallbacks.
-    // Also submit a subscription message to the server, or defer this message if sockline is not connected yet.
-    if (unknown_graph) {
-      subCallbacks.push({'graphSelector':graphSelector, 'success':[successCallback], 'error':[errorCallback]})
-      if (submitSubscription()) {
-        log("called subscribe while not connected - deferring");
-        deferreds.push(submitSubscription)
-      }
-    }
+    // Add the callbacks to subCallbacks, and submit a subscription message if needed.
+    registerCallbacks(subCallbacks, graphSelector, successCallback, errorCallback, submitSubscription)
 
     // ## Return a subscription object 
     // The subscription object implements an 'unsubscribe' method.
@@ -261,8 +274,6 @@
   // @successCallback - The function to be called when data is received
   // @errorCallback - The function to be called when an error is received
   sockline.get = function (graphSelector, successCallback, errorCallback) {
-    var unknown_graph;
-    var selector = JSON.stringify(graphSelector);
 
     // Lambda that submits a get message to the server. Returns false when done, true otherwise.
     var submitGet = function () {
@@ -274,43 +285,8 @@
       }
     }
 
-    // Lambda that wraps the callbacks to remove this request from the getCallbacks, so new get calls will trigger a new request
-    var wrap = function(callback) {
-      return function(data) {
-        // Remove callbacks
-        getCallbacks.every(function (callbacks, index) {
-          // TODO: Make a more robust comparison method
-          if (JSON.stringify(callbacks['graphSelector']) === selector) {
-            getCallbacks.splice(index, 1);
-          }
-        })
-        callback.call(this, data)
-      }
-    }
-
-    // ## Register callbacks
-    // First, check if someone is already getting this graphSelector. 
-    // If so, simply add the new callbacks.
-    unknown_graph = getCallbacks.every(function (callbacks) {
-      // TODO: Make a more robust comparison method
-      if (JSON.stringify(callbacks['graphSelector']) === selector) {
-        callbacks['success'].push(wrap(successCallback));
-        callbacks['error'].push(wrap(errorCallback));
-        return false;
-      } else {
-        return true;
-      }
-    })
-
-    // If nobody is currently gettting this graph, create new getCallbacks.
-    // Also submit a get message to the server, or defer this message if sockline is not connected yet.
-    if (unknown_graph) {
-      getCallbacks.push({'graphSelector':graphSelector, 'success':[wrap(successCallback)], 'error':[wrap(errorCallback)]})
-      if (submitGet()) {
-        log("called get while not connected - deferring");
-        deferreds.push(submitGet)
-      }
-    }
+    // Add the callbacks to getCallbacks, but do not submit a get message
+    registerCallbacks(getCallbacks, graphSelector, successCallback, errorCallback, submitGet)
   }
 
   // Function to test things, to be removed.
@@ -330,11 +306,14 @@
 
 // To test, run the following snippets in the console:
 
-// var wsUri = "ws://echo.websocket.org";
-// var succ = (function (data) {console.log("Successback received: " + data)})
-// var err = (function (data) {console.log("Errback received: " + data)})
-// var graph = {name: 'test.graph', start: 1, end: 2, precision: '15s'}
-// var testMessage = JSON.stringify({get:[{graphSelector:graph, result:'success', data:[1,2,3,4,5]}], subscription:[{graphSelector:graph, result:'success', data:[6]}]})
-// window.sockline.connect(wsUri);
-// window.sockline.subscribe(graph, succ, err);
-// window.sockline.send(testMessage)
+// var wsUri = "ws://0.0.0.0:3001/sock";
+// var succ1 = (function (data) {console.log("Successback1 received: " + JSON.stringify(data))});
+// var succ2 = (function (data) {console.log("Successback2 received: " + JSON.stringify(data))});
+// var err1 = (function (data) {console.log("Errback1 received: " + JSON.stringify(data))});
+// var err2 = (function (data) {console.log("Errback2 received: " + JSON.stringify(data))});
+// var graph1 = {name: 'phusion.UnionStation.web1.system.temperature.Core_0', from: '-20min', precision: '15s'};
+// var graph2 = {name: 'phusion.UnionStation.web1.system.temperature.Core_1', from: '-20min', precision: '15s'};
+// sockline.connect(wsUri);
+// var sub1 = sockline.subscribe(graph1, succ1, err1);
+// sockline.get(graph2, succ2, err2);
+// var sub2 = sockline.subscribe(graph2, succ2, err2);
